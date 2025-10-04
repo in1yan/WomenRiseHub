@@ -1,0 +1,37 @@
+{
+  "name": "womenrisehub",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@emotion/is-prop-valid": "latest",
+    "@radix-ui/react-progress": "latest",
+    "@radix-ui/react-slot": "latest",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "framer-motion": "latest",
+    "lucide-react": "^0.454.0",
+    "next": "15.2.4",
+    "next-themes": "latest",
+    "react": "^19",
+    "react-dom": "^19",
+    "recharts": "latest",
+    "tailwind-merge": "^2.5.5",
+    "tailwindcss-animate": "^1.0.7",
+    "tw-animate-css": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.14",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "autoprefixer": "^10",
+    "postcss": "^8",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
