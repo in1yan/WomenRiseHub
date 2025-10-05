@@ -216,3 +216,39 @@ class ProjectVolunteer(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# -----------------------------
+# Analytics Schemas
+# -----------------------------
+
+
+class AnalyticsOverview(BaseModel):
+    total_projects: int = 0
+    total_events: int = 0
+    total_volunteers: int = 0
+    total_hours: int = 0
+    total_applications: int = 0
+    total_impact: int = 0
+
+
+class AnalyticsCategoryMetric(BaseModel):
+    name: str
+    value: int
+
+
+class AnalyticsSkillMetric(BaseModel):
+    name: str
+    value: int
+
+
+class AnalyticsMonthlyHoursPoint(BaseModel):
+    month: str
+    hours: int
+
+
+class AnalyticsApplicationStats(BaseModel):
+    total: int = 0
+    pending: int = 0
+    accepted: int = 0
+    rejected: int = 0

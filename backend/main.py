@@ -1,12 +1,14 @@
 import os
 import random
 import uuid
-from datetime import timedelta
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
 from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, selectinload
 
 from auth import authenticate_user, create_access_token, get_current_user
 from database import Base, SessionLocal, engine
@@ -31,6 +33,11 @@ from schemas import (
     UserCreate,
     UserLogin,
     UserUpdate,
+    AnalyticsOverview,
+    AnalyticsCategoryMetric,
+    AnalyticsSkillMetric,
+    AnalyticsMonthlyHoursPoint,
+    AnalyticsApplicationStats,
 )
 from utils import hash_pwd
 
@@ -56,6 +63,11 @@ def get_db():
         yield db 
     finally:
         db.close()
+
+
+def _get_date_threshold(days: int) -> datetime:
+    clamped_days = max(1, min(days, 365))
+    return datetime.utcnow() - timedelta(days=clamped_days)
 
 
 def generate_user_id(db: Session) -> str:
@@ -305,6 +317,184 @@ def list_project_volunteers(
             )
         )
     return result
+
+
+# -----------------------------
+# Analytics Endpoints
+# -----------------------------
+
+
+def _volunteer_within_range(volunteer: ProjectVolunteerModel, *, threshold: datetime) -> bool:
+    if volunteer.joined_at and volunteer.joined_at >= threshold:
+        return True
+    project = volunteer.project
+    if project and project.created_at and project.created_at >= threshold:
+        return True
+    return False
+
+
+@app.get('/analytics/overview', response_model=AnalyticsOverview)
+def get_analytics_overview(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    threshold = _get_date_threshold(days)
+    threshold_date = threshold.date()
+
+    project_query = (
+        db.query(ProjectModel)
+        .filter(ProjectModel.owner_id == current_user.id)
+        .filter(ProjectModel.created_at >= threshold)
+    )
+    total_projects = project_query.count()
+
+    total_events = (
+        db.query(ProjectEventModel)
+        .join(ProjectModel, ProjectEventModel.project_id == ProjectModel.id)
+        .filter(ProjectModel.owner_id == current_user.id)
+        .filter(ProjectEventModel.date >= threshold_date)
+        .count()
+    )
+
+    volunteer_query = (
+        db.query(ProjectVolunteerModel)
+        .options(selectinload(ProjectVolunteerModel.project))
+        .join(ProjectModel, ProjectVolunteerModel.project_id == ProjectModel.id)
+        .filter(ProjectModel.owner_id == current_user.id)
+    )
+    volunteers = [v for v in volunteer_query.all() if _volunteer_within_range(v, threshold=threshold)]
+    total_volunteers = len(volunteers)
+    total_hours = sum((v.hours_contributed if v.hours_contributed is not None else 15) for v in volunteers)
+
+    total_applications = (
+        db.query(ProjectApplicationModel)
+        .join(ProjectModel, ProjectApplicationModel.project_id == ProjectModel.id)
+        .filter(ProjectModel.owner_id == current_user.id)
+        .filter(ProjectApplicationModel.applied_at >= threshold)
+        .count()
+    )
+
+    total_impact = total_volunteers * 50
+
+    return AnalyticsOverview(
+        total_projects=total_projects,
+        total_events=total_events,
+        total_volunteers=total_volunteers,
+        total_hours=total_hours,
+        total_applications=total_applications,
+        total_impact=total_impact,
+    )
+
+
+@app.get('/analytics/projects-by-category', response_model=List[AnalyticsCategoryMetric])
+def get_projects_by_category(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    threshold = _get_date_threshold(days)
+
+    category_counts = (
+        db.query(ProjectModel.category, func.count(ProjectModel.id))
+        .filter(ProjectModel.owner_id == current_user.id)
+        .filter(ProjectModel.created_at >= threshold)
+        .group_by(ProjectModel.category)
+        .all()
+    )
+
+    return [AnalyticsCategoryMetric(name=category or "Uncategorized", value=count) for category, count in category_counts]
+
+
+@app.get('/analytics/skills-distribution', response_model=List[AnalyticsSkillMetric])
+def get_skills_distribution(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    threshold = _get_date_threshold(days)
+
+    projects = (
+        db.query(ProjectModel)
+        .filter(ProjectModel.owner_id == current_user.id)
+        .filter(ProjectModel.created_at >= threshold)
+        .all()
+    )
+
+    skill_counter: Counter[str] = Counter()
+    for project in projects:
+        if not project.skills_needed:
+            continue
+        for skill in project.skills_needed:
+            normalized = str(skill).strip()
+            if normalized:
+                skill_counter[normalized] += 1
+
+    top_skills = skill_counter.most_common(5)
+    return [AnalyticsSkillMetric(name=name, value=value) for name, value in top_skills]
+
+
+@app.get('/analytics/monthly-hours', response_model=List[AnalyticsMonthlyHoursPoint])
+def get_monthly_hours(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    threshold = _get_date_threshold(days)
+
+    volunteers = (
+        db.query(ProjectVolunteerModel)
+        .options(selectinload(ProjectVolunteerModel.project))
+        .join(ProjectModel, ProjectVolunteerModel.project_id == ProjectModel.id)
+        .filter(ProjectModel.owner_id == current_user.id)
+        .all()
+    )
+
+    monthly_hours: defaultdict[str, int] = defaultdict(int)
+    for volunteer in volunteers:
+        reference_date = volunteer.joined_at or (volunteer.project.created_at if volunteer.project else None)
+        if not reference_date or reference_date < threshold:
+            continue
+        month_key = reference_date.strftime('%Y-%m')
+        monthly_hours[month_key] += volunteer.hours_contributed if volunteer.hours_contributed is not None else 15
+
+    sorted_points = sorted(monthly_hours.items())
+    return [
+        AnalyticsMonthlyHoursPoint(month=datetime.strptime(month, '%Y-%m').strftime('%b'), hours=hours)
+        for month, hours in sorted_points
+    ]
+
+
+@app.get('/analytics/application-stats', response_model=AnalyticsApplicationStats)
+def get_application_stats(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user: Users = Depends(get_current_user),
+):
+    threshold = _get_date_threshold(days)
+
+    base_query = (
+        db.query(ProjectApplicationModel)
+        .join(ProjectModel, ProjectApplicationModel.project_id == ProjectModel.id)
+        .filter(ProjectModel.owner_id == current_user.id)
+        .filter(ProjectApplicationModel.applied_at >= threshold)
+    )
+
+    total = base_query.count()
+    status_counts = dict(
+        base_query
+        .with_entities(ProjectApplicationModel.status, func.count(ProjectApplicationModel.id))
+        .group_by(ProjectApplicationModel.status)
+        .all()
+    )
+
+    return AnalyticsApplicationStats(
+        total=total,
+        pending=status_counts.get(ApplicationStatus.PENDING, 0),
+        accepted=status_counts.get(ApplicationStatus.ACCEPTED, 0),
+        rejected=status_counts.get(ApplicationStatus.REJECTED, 0),
+    )
+
 
 # -----------------------------
 # Application Status Updates
