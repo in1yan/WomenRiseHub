@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useAuth } from "@/contexts/AuthContext"
 import { useProjects, type Project, type Application, type Volunteer } from "@/contexts/ProjectsContext"
 import {
@@ -296,7 +296,10 @@ export default function ProjectsPage() {
 
 function CreateProjectForm({ onClose }: { onClose: () => void }) {
   const { user } = useAuth()
-  const { addProject } = useProjects()
+  const { addProject, uploadProjectImage } = useProjects()
+  const backendEnabled = Boolean(process.env.NEXT_PUBLIC_API_URL)
+  const defaultImageUrl = "/volunteer-project.jpg"
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024
   const [formData, setFormData] = useState({
     title: "",
     shortDescription: "",
@@ -307,7 +310,7 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
     location: "",
     startDate: "",
     endDate: "",
-    imageUrl: "/volunteer-project.jpg",
+    imageUrl: defaultImageUrl,
   })
   const [skillInput, setSkillInput] = useState("")
   const [events, setEvents] = useState<
@@ -320,6 +323,24 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
     description: "",
     slotsAvailable: 10,
   })
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState(defaultImageUrl)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const objectUrlRef = useRef<string | null>(null)
+
+  const clearObjectUrl = () => {
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current)
+      objectUrlRef.current = null
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      clearObjectUrl()
+    }
+  }, [])
 
   const handleAddSkill = () => {
     if (skillInput.trim() && !formData.skillsNeeded.includes(skillInput.trim())) {
@@ -343,17 +364,83 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
     setEvents(events.filter((_, i) => i !== index))
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+
+    if (!file.type.startsWith("image/")) {
+      setUploadError("Please choose a valid image file.")
+      return
+    }
+
+    if (file.size > MAX_IMAGE_BYTES) {
+      setUploadError("Image must be 5MB or smaller.")
+      return
+    }
+
+    setUploadError(null)
+    setImageFile(file)
+    clearObjectUrl()
+    const previewUrl = URL.createObjectURL(file)
+    objectUrlRef.current = previewUrl
+    setImagePreview(previewUrl)
+  }
+
+  const handleResetImage = () => {
+    setImageFile(null)
+    setUploadError(null)
+    clearObjectUrl()
+    setImagePreview(defaultImageUrl)
+    setFormData((prev) => ({ ...prev, imageUrl: defaultImageUrl }))
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    addProject({
-      ...formData,
-      creatorId: user?.id || "",
-      creatorName: user?.fullName || "",
-      creatorEmail: user?.email || "",
-      creatorPhone: user?.phone || "",
-      events: events.map((e, i) => ({ ...e, id: `event-${i}` })),
-    })
-    onClose()
+    setUploadError(null)
+    setIsSubmitting(true)
+
+    let shouldClose = false
+
+    try {
+      let storedImageUrl = formData.imageUrl || defaultImageUrl
+      let previewUrlForUi = imagePreview || defaultImageUrl
+
+      if (imageFile) {
+        const uploadResult = await uploadProjectImage(imageFile)
+        if (!uploadResult) {
+          if (backendEnabled) {
+            setUploadError("We couldn't upload the image. Please try again.")
+            return
+          }
+        } else {
+          storedImageUrl = uploadResult.storedUrl
+          previewUrlForUi = uploadResult.previewUrl
+          setFormData((prev) => ({ ...prev, imageUrl: uploadResult.storedUrl }))
+          clearObjectUrl()
+        }
+      }
+
+      addProject({
+        ...formData,
+        imageUrl: storedImageUrl,
+        creatorId: user?.id || "",
+        creatorName: user?.fullName || "",
+        creatorEmail: user?.email || "",
+        creatorPhone: user?.phone || "",
+        events: events.map((e, i) => ({ ...e, id: `event-${i}` })),
+      })
+
+      setImagePreview(previewUrlForUi)
+      setImageFile(null)
+      shouldClose = true
+    } finally {
+      setIsSubmitting(false)
+      if (shouldClose) {
+        onClose()
+      }
+    }
   }
 
   return (
@@ -469,6 +556,44 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
             </div>
 
             <div>
+              <label className="block text-sm font-medium text-[#1f2937] mb-2">Project Image</label>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <label
+                  htmlFor="project-image-upload"
+                  className={`inline-flex items-center justify-center px-5 py-3 rounded-lg border border-transparent bg-gradient-to-r from-[#ec4899] to-[#8b5cf6] text-white font-medium shadow-sm transition-all hover:shadow-lg ${isSubmitting ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+                  aria-disabled={isSubmitting}
+                >
+                  Choose Image
+                </label>
+                <button
+                  type="button"
+                  onClick={handleResetImage}
+                  disabled={(imagePreview === defaultImageUrl && !imageFile) || isSubmitting}
+                  className="px-4 py-3 rounded-lg border border-[#f3e8ff] text-[#1f2937] hover:bg-[#fce7f3]/60 transition-colors disabled:opacity-60"
+                >
+                  Use Default
+                </button>
+              </div>
+              <input
+                id="project-image-upload"
+                type="file"
+                accept="image/*"
+                onChange={handleImageChange}
+                className="hidden"
+                disabled={isSubmitting}
+              />
+              <p className="text-xs text-[#6b7280] mt-2">Recommended 1200×800px, max size 5MB (JPG, PNG, GIF, WebP).</p>
+              {uploadError && <p className="text-xs text-red-600 mt-2">{uploadError}</p>}
+              <div className="mt-3 h-48 w-full rounded-xl overflow-hidden border border-[#f3e8ff] bg-[#fdf2f8] flex items-center justify-center">
+                <img
+                  src={imagePreview || defaultImageUrl}
+                  alt="Project image preview"
+                  className="h-full w-full object-cover"
+                />
+              </div>
+            </div>
+
+            <div>
               <label className="block text-sm font-medium text-[#1f2937] mb-2">Skills Needed</label>
               <div className="flex gap-2 mb-3">
                 <input
@@ -579,15 +704,17 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 px-6 py-3 border border-[#f3e8ff] text-[#1f2937] rounded-lg hover:bg-[#fce7f3] transition-colors font-semibold"
+                disabled={isSubmitting}
+                className="flex-1 px-6 py-3 border border-[#f3e8ff] text-[#1f2937] rounded-lg hover:bg-[#fce7f3] transition-colors font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="flex-1 px-6 py-3 bg-[#ec4899] text-white rounded-lg hover:bg-[#db2777] transition-colors font-semibold"
+                disabled={isSubmitting}
+                className="flex-1 px-6 py-3 bg-[#ec4899] text-white rounded-lg hover:bg-[#db2777] transition-colors font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Create Project
+                {isSubmitting ? "Creating..." : "Create Project"}
               </button>
             </div>
           </form>

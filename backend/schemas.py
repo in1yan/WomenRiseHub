@@ -7,6 +7,9 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator, EmailStr
 
 
+DEFAULT_PROJECT_IMAGE_URL = "/volunteer-project.jpg"
+
+
 class ProjectTypeEnum(str, Enum):
     ONLINE = "Online"
     ONSITE = "Onsite"
@@ -135,6 +138,15 @@ class ProjectBase(BaseModel):
         if isinstance(value, list):
             return value
         return []
+
+    @field_validator("image_url", mode="before")
+    @classmethod
+    def default_image_if_missing(cls, value):
+        if value is None:
+            return DEFAULT_PROJECT_IMAGE_URL
+        if isinstance(value, str) and value.strip() == "":
+            return DEFAULT_PROJECT_IMAGE_URL
+        return value
 
 
 class ProjectCreate(ProjectBase):

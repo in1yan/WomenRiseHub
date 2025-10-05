@@ -3,10 +3,12 @@ import random
 import uuid
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
@@ -41,6 +43,43 @@ from schemas import (
 )
 from utils import hash_pwd
 
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_ROOT = BASE_DIR / "uploads"
+PROJECT_IMAGE_DIR = UPLOAD_ROOT / "project_images"
+PROJECT_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+DEFAULT_PROJECT_IMAGE_URL = "/volunteer-project.jpg"
+
+ALLOWED_IMAGE_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+}
+
+CONTENT_TYPE_EXTENSION_MAP = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
+ALLOWED_IMAGE_EXTENSIONS = set(CONTENT_TYPE_EXTENSION_MAP.values())
+MAX_IMAGE_SIZE_MB = 5
+MAX_IMAGE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024
+
+
+def _validate_root_relative_path(path: str) -> str:
+    parts = path.split("/")
+    if ".." in parts:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image URL path.")
+    suffix = Path(path).suffix.lower()
+    if suffix and suffix in ALLOWED_IMAGE_EXTENSIONS:
+        return path
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported image path format.")
+
 TOKEN_EXPIRATION = int(os.getenv("TOKEN_EXPIRATION"))
 
 app = FastAPI() 
@@ -52,6 +91,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/uploads", StaticFiles(directory=UPLOAD_ROOT), name="uploads")
 
 @app.on_event("startup")
 async def startup():
@@ -78,6 +119,58 @@ def generate_user_id(db: Session) -> str:
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="Unable to generate a unique user ID"
+    )
+
+
+def _resolve_image_extension(file: UploadFile) -> str:
+    candidate = (Path(file.filename or "").suffix or "").lower()
+    if candidate in ALLOWED_IMAGE_EXTENSIONS:
+        return candidate
+
+    content_type = (file.content_type or "").lower()
+    mapped = CONTENT_TYPE_EXTENSION_MAP.get(content_type)
+    if mapped:
+        return mapped
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Unsupported image format. Please upload a JPEG, PNG, GIF, or WebP file.",
+    )
+
+
+def _normalize_image_url_for_storage(raw: str) -> str:
+    cleaned = raw.strip()
+    if not cleaned:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Image URL cannot be empty.")
+
+    lowered = cleaned.lower()
+    if lowered.startswith("data:"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inline image data is not supported. Upload the image first and provide the returned URL.",
+        )
+
+    if cleaned == DEFAULT_PROJECT_IMAGE_URL:
+        return cleaned
+
+    # Allow absolute URLs that use http/https
+    if lowered.startswith("http://") or lowered.startswith("https://"):
+        return cleaned
+
+    # Allow relative URLs that point to the uploads directory
+    if cleaned.startswith("/uploads/project_images/"):
+        parts = cleaned.split("/")
+        if ".." in parts or "" in parts[1:-1]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image URL path.")
+        return cleaned
+
+    # Allow other root-relative static assets (e.g., frontend public directory)
+    if cleaned.startswith("/"):
+        return _validate_root_relative_path(cleaned)
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Invalid image URL. Upload the image first and provide the returned URL.",
     )
 
 @app.get('/')
@@ -130,6 +223,40 @@ async def create_user(user: UserCreate, db: Session = Depends(get_db)):
     db.refresh(new_user)
     return new_user
 
+
+@app.post('/projects/upload-image', status_code=status.HTTP_201_CREATED)
+async def upload_project_image(
+    file: UploadFile = File(...),
+    current_user: Users = Depends(get_current_user),
+):
+    if file.content_type is None or file.content_type.lower() not in ALLOWED_IMAGE_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported image type. Allowed types: JPEG, PNG, GIF, WebP.",
+        )
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded image is empty.")
+    if len(file_bytes) > MAX_IMAGE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Image is too large. Maximum size is {MAX_IMAGE_SIZE_MB}MB.",
+        )
+
+    extension = _resolve_image_extension(file)
+    filename = f"{uuid.uuid4().hex}{extension}"
+    file_path = PROJECT_IMAGE_DIR / filename
+
+    try:
+        with open(file_path, "wb") as buffer:
+            buffer.write(file_bytes)
+    finally:
+        await file.close()
+
+    relative_url = f"/uploads/project_images/{filename}"
+    return {"image_url": relative_url}
+
 @app.put('/update/user', response_model=User)
 def update_user(updated_user: UserUpdate, db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
     user = db.query(Users).filter(Users.id == current_user.id).first()
@@ -170,6 +297,8 @@ def create_project(
             detail="End date must be on or after the start date",
         )
 
+    normalized_image_url = _normalize_image_url_for_storage(details.image_url)
+
     project = ProjectModel(
         id=str(uuid.uuid4()),
         owner_id=current_user.id,
@@ -179,7 +308,7 @@ def create_project(
         category=details.category,
         project_type=ProjectType(details.project_type.value),
         location=details.location,
-        image_url=details.image_url,
+        image_url=normalized_image_url,
         skills_needed=details.skills_needed,
         start_date=details.start_date,
         end_date=details.end_date,

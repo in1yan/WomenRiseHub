@@ -69,6 +69,7 @@ interface ProjectsContextType {
   getUserApplications: (userId: string) => Application[]
   fetchProjectApplications: (projectId: string) => Promise<Application[]>
   fetchProjectVolunteers: (projectId: string) => Promise<Volunteer[]>
+  uploadProjectImage: (file: File) => Promise<{ storedUrl: string; previewUrl: string } | null>
 }
 
 const ProjectsContext = createContext<ProjectsContextType | undefined>(undefined)
@@ -188,6 +189,80 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
   const API_URL = process.env.NEXT_PUBLIC_API_URL || ""
   const TOKEN_STORAGE_KEY = "womenrisehub_token"
   const TOKEN_TYPE_STORAGE_KEY = "womenrisehub_token_type"
+  const apiBase = API_URL.replace(/\/$/, "")
+
+  const resolveImageUrl = (raw?: string | null): string | null => {
+    if (!raw) return null
+    if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("data:")) {
+      return raw
+    }
+    if (!API_URL) {
+      return raw
+    }
+    return `${apiBase}${raw.startsWith("/") ? "" : "/"}${raw}`
+  }
+
+  const readFileAsDataURL = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        if (typeof reader.result === "string") {
+          resolve(reader.result)
+        } else {
+          reject(new Error("Unsupported file result type"))
+        }
+      }
+      reader.onerror = () => reject(reader.error ?? new Error("Failed to read image file"))
+      reader.readAsDataURL(file)
+    })
+
+  const uploadProjectImage = async (file: File): Promise<{ storedUrl: string; previewUrl: string } | null> => {
+    if (!file) return null
+
+    if (API_URL) {
+      try {
+        const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+        const tokenType = localStorage.getItem(TOKEN_TYPE_STORAGE_KEY) || "Bearer"
+        const formData = new FormData()
+        formData.append("file", file)
+
+        const requestInit: RequestInit = {
+          method: "POST",
+          body: formData,
+        }
+
+        if (token) {
+          requestInit.headers = {
+            Authorization: `${tokenType} ${token}`,
+          }
+        }
+
+        const response = await fetch(`${apiBase}/projects/upload-image`, requestInit)
+        if (response.ok) {
+          const payload = await response.json()
+          const rawStoredUrl = (payload?.image_url ?? payload?.imageUrl)?.toString().trim()
+          if (rawStoredUrl) {
+            const previewUrl = resolveImageUrl(rawStoredUrl) ?? rawStoredUrl
+            return { storedUrl: rawStoredUrl, previewUrl }
+          }
+        } else {
+          console.error("Failed to upload image", response.status, await response.text().catch(() => ""))
+        }
+      } catch (error) {
+        console.error("Image upload error", error)
+        return null
+      }
+      return null
+    }
+
+    try {
+      const dataUrl = await readFileAsDataURL(file)
+      return { storedUrl: dataUrl, previewUrl: dataUrl }
+    } catch (error) {
+      console.error("Image conversion error", error)
+      return null
+    }
+  }
 
   useEffect(() => {
     // If backend is configured, fetch from API first, else fallback to local storage
@@ -263,7 +338,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       location: api.location ?? undefined,
       startDate: typeof api.start_date === "string" ? api.start_date : api.startDate,
       endDate: typeof api.end_date === "string" ? api.end_date : api.endDate,
-      imageUrl: api.image_url ?? api.imageUrl ?? "/volunteer-project.jpg",
+      imageUrl: resolveImageUrl(api.image_url ?? api.imageUrl) ?? "/volunteer-project.jpg",
       creatorId: owner.id ?? api.owner_id ?? api.creatorId ?? "",
       creatorName: owner.name ?? api.creatorName ?? "",
       creatorEmail: owner.email ?? api.creatorEmail ?? "",
@@ -328,6 +403,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
         const localProject: Project = {
           ...project,
           id: Date.now().toString(),
+          imageUrl: resolveImageUrl(project.imageUrl) ?? project.imageUrl ?? "/volunteer-project.jpg",
           volunteers: [],
           applications: [],
         }
@@ -340,6 +416,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     const newProject: Project = {
       ...project,
       id: Date.now().toString(),
+      imageUrl: resolveImageUrl(project.imageUrl) ?? project.imageUrl ?? "/volunteer-project.jpg",
       volunteers: [],
       applications: [],
     }
@@ -648,6 +725,7 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
         getUserApplications,
         fetchProjectApplications,
         fetchProjectVolunteers,
+        uploadProjectImage,
       }}
     >
       {children}
