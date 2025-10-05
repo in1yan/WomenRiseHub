@@ -103,11 +103,7 @@ export default function SearchPage() {
   const handleApply = () => {
     if (!selectedProject || !user) return
 
-    // Open Google Form in new tab (simulated)
-    const googleFormUrl = `https://docs.google.com/forms/d/e/1FAIpQLSc_example/viewform?entry.name=${encodeURIComponent(applicationData.name)}&entry.email=${encodeURIComponent(applicationData.email)}`
-    window.open(googleFormUrl, "_blank")
-
-    // Record application locally
+    // Submit application via context (will call backend if configured)
     applyToProject(selectedProject.id, {
       projectId: selectedProject.id,
       volunteerId: user.id,
@@ -371,7 +367,7 @@ export default function SearchPage() {
               exit={{ scale: 0.9, opacity: 0 }}
               transition={{ type: "spring", duration: 0.5 }}
               className="bg-white rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation()}
             >
               <div className="relative h-64">
                 <Image
@@ -509,9 +505,7 @@ export default function SearchPage() {
                 </button>
               </div>
 
-              <p className="text-[#6b7280] mb-6">
-                You'll be redirected to fill out a Google Form. Your application will also be recorded in the system.
-              </p>
+              {/* Removed Google Form redirection. Application is submitted directly in-app. */}
 
               <div className="space-y-4 mb-6">
                 <div>

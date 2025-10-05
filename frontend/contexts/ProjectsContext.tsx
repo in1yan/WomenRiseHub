@@ -37,7 +37,7 @@ export interface Volunteer {
   name: string
   email: string
   skills: string[]
-  status: "Active"
+  status: "Active" | "Inactive"
 }
 
 export interface Application {
@@ -59,9 +59,16 @@ interface ProjectsContextType {
   updateProject: (id: string, updates: Partial<Project>) => void
   deleteProject: (id: string) => void
   applyToProject: (projectId: string, application: Omit<Application, "id" | "appliedAt">) => void
-  updateApplicationStatus: (projectId: string, applicationId: string, status: "Accepted" | "Rejected") => void
+  updateApplicationStatus: (
+    projectId: string,
+    applicationId: string,
+    status: "Accepted" | "Rejected",
+    application?: Application,
+  ) => Promise<void>
   getUserProjects: (userId: string) => Project[]
   getUserApplications: (userId: string) => Application[]
+  fetchProjectApplications: (projectId: string) => Promise<Application[]>
+  fetchProjectVolunteers: (projectId: string) => Promise<Volunteer[]>
 }
 
 const ProjectsContext = createContext<ProjectsContextType | undefined>(undefined)
@@ -177,8 +184,46 @@ const sampleProjects: Project[] = [
 
 export function ProjectsProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([])
+  // Optional backend integration
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || ""
+  const TOKEN_STORAGE_KEY = "womenrisehub_token"
+  const TOKEN_TYPE_STORAGE_KEY = "womenrisehub_token_type"
 
   useEffect(() => {
+    // If backend is configured, fetch from API first, else fallback to local storage
+    if (API_URL) {
+      ;(async () => {
+        try {
+          const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+          const tokenType = localStorage.getItem(TOKEN_TYPE_STORAGE_KEY) || "Bearer"
+          const headers: Record<string, string> = { "Content-Type": "application/json" }
+          if (token) headers["Authorization"] = `${tokenType} ${token}`
+
+          const res = await fetch(`${API_URL.replace(/\/$/, "")}/projects`, { headers })
+          if (res.ok) {
+            const apiProjects = await res.json()
+            const mapped: Project[] = Array.isArray(apiProjects)
+              ? apiProjects.map((p: any) => mapApiProjectToProject(p))
+              : []
+            setProjects(mapped)
+            // Also mirror to local storage so UI remains stable offline
+            localStorage.setItem("womenrisehub_projects", JSON.stringify(mapped))
+            return
+          }
+        } catch (_) {
+          // ignore and fallback
+        }
+        const stored = localStorage.getItem("womenrisehub_projects")
+        if (stored) {
+          setProjects(JSON.parse(stored))
+        } else {
+          setProjects(sampleProjects)
+          localStorage.setItem("womenrisehub_projects", JSON.stringify(sampleProjects))
+        }
+      })()
+      return
+    }
+
     const stored = localStorage.getItem("womenrisehub_projects")
     if (stored) {
       setProjects(JSON.parse(stored))
@@ -193,7 +238,103 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     localStorage.setItem("womenrisehub_projects", JSON.stringify(updatedProjects))
   }
 
+  const mapApiProjectToProject = (api: any): Project => {
+    const events: Event[] = Array.isArray(api.events)
+      ? api.events.map((e: any) => ({
+          id: e.id,
+          name: e.name,
+          date: typeof e.date === "string" ? e.date : new Date(e.date).toISOString().slice(0, 10),
+          time: e.time,
+          description: e.description ?? "",
+          slotsAvailable: typeof e.slots_available === "number" ? e.slots_available : e.slotsAvailable ?? 0,
+        }))
+      : []
+
+    const project: Project = {
+      id: api.id,
+      title: api.title,
+      shortDescription: api.short_description ?? api.shortDescription,
+      detailedDescription: api.detailed_description ?? api.detailedDescription,
+      category: api.category,
+      skillsNeeded: api.skills_needed ?? api.skillsNeeded ?? [],
+      projectType: api.project_type ?? api.projectType,
+      location: api.location ?? undefined,
+      startDate: typeof api.start_date === "string" ? api.start_date : api.startDate,
+      endDate: typeof api.end_date === "string" ? api.end_date : api.endDate,
+      imageUrl: api.image_url ?? api.imageUrl ?? "/volunteer-project.jpg",
+      creatorId: api.owner_id ?? api.creatorId ?? "",
+      creatorName: api.owner?.name ?? api.creatorName ?? "",
+      creatorEmail: api.owner?.email ?? api.creatorEmail ?? "",
+      creatorPhone: api.owner?.phonenumber ?? api.creatorPhone ?? "",
+      events,
+      volunteers: [],
+      applications: [],
+    }
+    return project
+  }
+
   const addProject = (project: Omit<Project, "id" | "volunteers" | "applications">) => {
+    // If backend URL configured, attempt to create on server first
+    if (API_URL) {
+      ;(async () => {
+        try {
+          const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+          const tokenType = localStorage.getItem(TOKEN_TYPE_STORAGE_KEY) || "Bearer"
+          if (!token) throw new Error("Missing auth token")
+
+          // Map camelCase to snake_case payload expected by backend
+          const payload = {
+            title: project.title,
+            short_description: project.shortDescription,
+            detailed_description: project.detailedDescription,
+            category: project.category,
+            project_type: project.projectType,
+            location: project.location || null,
+            image_url: project.imageUrl || null,
+            skills_needed: project.skillsNeeded || [],
+            start_date: project.startDate,
+            end_date: project.endDate,
+            events: (project.events || []).map((e) => ({
+              name: e.name,
+              description: e.description || "",
+              date: e.date,
+              time: e.time,
+              slots_available: e.slotsAvailable ?? 0,
+            })),
+          }
+
+          const res = await fetch(`${API_URL.replace(/\/$/, "")}/create/project`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `${tokenType} ${token}`,
+            },
+            body: JSON.stringify(payload),
+          })
+
+          if (res.ok) {
+            const apiProject = await res.json()
+            const mapped = mapApiProjectToProject(apiProject)
+            saveProjects([...projects, mapped])
+            return
+          }
+          // fall through to local save on non-OK
+        } catch (_) {
+          // swallow and fallback
+        }
+        // Fallback to local-only save if API call fails
+        const localProject: Project = {
+          ...project,
+          id: Date.now().toString(),
+          volunteers: [],
+          applications: [],
+        }
+        saveProjects([...projects, localProject])
+      })()
+      return
+    }
+
+    // Local-only persistence
     const newProject: Project = {
       ...project,
       id: Date.now().toString(),
@@ -212,47 +353,166 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
   }
 
   const applyToProject = (projectId: string, application: Omit<Application, "id" | "appliedAt">) => {
+    // If backend URL configured, attempt to submit application to server first
+    if (API_URL) {
+      ;(async () => {
+        try {
+          const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+          const tokenType = localStorage.getItem(TOKEN_TYPE_STORAGE_KEY) || "Bearer"
+          if (!token) throw new Error("Missing auth token")
+
+          const payload = {
+            project_id: projectId,
+            skills: application.skills ?? [],
+            message: application.message ?? "",
+          }
+
+          const res = await fetch(`${API_URL.replace(/\/$/, "")}/projects/${projectId}/apply`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `${tokenType} ${token}`,
+            },
+            body: JSON.stringify(payload),
+          })
+
+          if (res.ok) {
+            const apiApp = await res.json()
+            const newApplication: Application = {
+              id: apiApp.id || Date.now().toString(),
+              projectId,
+              volunteerId: application.volunteerId,
+              volunteerName: apiApp.volunteer_name ?? application.volunteerName,
+              volunteerEmail: apiApp.volunteer_email ?? application.volunteerEmail,
+              volunteerPhone: apiApp.volunteer_phone ?? application.volunteerPhone,
+              skills: Array.isArray(apiApp.skills) ? apiApp.skills : application.skills,
+              message: typeof apiApp.message === "string" ? apiApp.message : application.message,
+              status: apiApp.status ?? application.status,
+              appliedAt: apiApp.applied_at || new Date().toISOString(),
+            }
+            saveProjects(
+              projects.map((p) =>
+                p.id === projectId ? { ...p, applications: [...p.applications, newApplication] } : p,
+              ),
+            )
+            return
+          }
+          // fall through to local save if non-OK
+        } catch (_) {
+          // ignore and fallback
+        }
+        // Fallback: local application record
+        const fallbackApp: Application = {
+          ...application,
+          id: Date.now().toString(),
+          appliedAt: new Date().toISOString(),
+        }
+        saveProjects(
+          projects.map((p) => (p.id === projectId ? { ...p, applications: [...p.applications, fallbackApp] } : p)),
+        )
+      })()
+      return
+    }
+
+    // Local-only persistence
     const newApplication: Application = {
       ...application,
       id: Date.now().toString(),
       appliedAt: new Date().toISOString(),
     }
-
     saveProjects(
       projects.map((p) => (p.id === projectId ? { ...p, applications: [...p.applications, newApplication] } : p)),
     )
   }
 
-  const updateApplicationStatus = (projectId: string, applicationId: string, status: "Accepted" | "Rejected") => {
-    saveProjects(
-      projects.map((p) => {
-        if (p.id === projectId) {
-          const updatedApplications = p.applications.map((app) => (app.id === applicationId ? { ...app, status } : app))
+  const updateApplicationStatus = async (
+    projectId: string,
+    applicationId: string,
+    status: "Accepted" | "Rejected",
+    applicationParam?: Application,
+  ) => {
+    // Helper to update local state consistently
+    const applyLocalUpdate = () => {
+      saveProjects(
+        projects.map((p) => {
+          if (p.id === projectId) {
+            const updatedApplications = p.applications.map((app) =>
+              app.id === applicationId ? { ...app, status } : app,
+            )
 
-          // If accepted, add to volunteers
-          if (status === "Accepted") {
-            const acceptedApp = p.applications.find((app) => app.id === applicationId)
-            if (acceptedApp) {
-              const newVolunteer: Volunteer = {
-                id: acceptedApp.volunteerId,
-                name: acceptedApp.volunteerName,
-                email: acceptedApp.volunteerEmail,
-                skills: acceptedApp.skills,
-                status: "Active",
-              }
-              return {
-                ...p,
-                applications: updatedApplications,
-                volunteers: [...p.volunteers, newVolunteer],
+            if (status === "Accepted") {
+              const acceptedApp = p.applications.find((app) => app.id === applicationId) || applicationParam
+              if (acceptedApp) {
+                const alreadyVolunteer = p.volunteers.some((v) => v.id === acceptedApp.volunteerId)
+                const newVolunteer: Volunteer | null = alreadyVolunteer
+                  ? null
+                  : {
+                      id: acceptedApp.volunteerId,
+                      name: acceptedApp.volunteerName,
+                      email: acceptedApp.volunteerEmail,
+                      skills: acceptedApp.skills,
+                      status: "Active",
+                    }
+                return {
+                  ...p,
+                  applications: updatedApplications,
+                  volunteers: newVolunteer ? [...p.volunteers, newVolunteer] : p.volunteers,
+                }
               }
             }
+            return { ...p, applications: updatedApplications }
           }
+          return p
+        }),
+      )
+    }
 
-          return { ...p, applications: updatedApplications }
+    // If backend is configured, attempt to update on server first
+    if (API_URL) {
+      try {
+        const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+        const tokenType = localStorage.getItem(TOKEN_TYPE_STORAGE_KEY) || "Bearer"
+        const headers: Record<string, string> = { "Content-Type": "application/json" }
+        if (token) headers["Authorization"] = `${tokenType} ${token}`
+
+        const base = API_URL.replace(/\/$/, "")
+        const payload = { status }
+
+        // Try a few common REST patterns
+        const attempts = [
+          { url: `${base}/projects/${projectId}/applications/${applicationId}/status`, method: "PATCH" as const },
+          { url: `${base}/applications/${applicationId}/status`, method: "PATCH" as const },
+          { url: `${base}/projects/${projectId}/applications/${applicationId}/status`, method: "POST" as const },
+          { url: `${base}/applications/${applicationId}/status`, method: "POST" as const },
+        ]
+
+        let succeeded = false
+        for (const { url, method } of attempts) {
+          try {
+            const res = await fetch(url, { method, headers, body: JSON.stringify(payload) })
+            if (res.ok) {
+              // Optionally read response; we'll still update locally to ensure UI consistency
+              // const serverApp = await res.json().catch(() => null)
+              succeeded = true
+              break
+            }
+          } catch (_) {
+            // try next pattern
+          }
         }
-        return p
-      }),
-    )
+
+        // Apply local state regardless; if server failed, the UI stays responsive and can be reconciled by a refetch
+        applyLocalUpdate()
+        return
+      } catch (_) {
+        // Fall back to local-only update on any error
+        applyLocalUpdate()
+        return
+      }
+    }
+
+    // No backend configured: local-only update
+    applyLocalUpdate()
   }
 
   const getUserProjects = (userId: string) => {
@@ -271,6 +531,108 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
     return allApplications
   }
 
+  const mapApiApplicationToApplication = (api: any, projectId: string): Application => {
+    const rawStatus = String(api.status ?? "Pending").toLowerCase()
+    const status: Application["status"] = rawStatus.includes("accept")
+      ? "Accepted"
+      : rawStatus.includes("reject")
+        ? "Rejected"
+        : "Pending"
+    return {
+      id: api.id,
+      projectId,
+      volunteerId: api.volunteer_id ?? "",
+      volunteerName: api.volunteer_name ?? "",
+      volunteerEmail: api.volunteer_email ?? "",
+      volunteerPhone: api.volunteer_phone ?? undefined,
+      skills: Array.isArray(api.skills) ? api.skills : [],
+      message: typeof api.message === "string" ? api.message : "",
+      status,
+      appliedAt: typeof api.applied_at === "string" ? api.applied_at : new Date().toISOString(),
+    }
+  }
+
+  const fetchProjectApplications = async (projectId: string): Promise<Application[]> => {
+    // If no API configured, return local applications
+    if (!API_URL) {
+      const p = projects.find((x) => x.id === projectId)
+      return p?.applications ?? []
+    }
+
+    try {
+      const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+      const tokenType = localStorage.getItem(TOKEN_TYPE_STORAGE_KEY) || "Bearer"
+      const headers: Record<string, string> = { "Content-Type": "application/json" }
+      if (token) headers["Authorization"] = `${tokenType} ${token}`
+
+      const res = await fetch(`${API_URL.replace(/\/$/, "")}/projects/${projectId}/applications`, { headers })
+      if (!res.ok) throw new Error(`Failed to fetch applications: ${res.status}`)
+      const apiApps = await res.json()
+      const mapped: Application[] = Array.isArray(apiApps)
+        ? apiApps.map((a: any) => mapApiApplicationToApplication(a, projectId))
+        : []
+
+      // Only update state if changed to avoid unnecessary re-renders
+      const current = projects.find((p) => p.id === projectId)?.applications ?? []
+      const sameLength = current.length === mapped.length
+      const sameIds = sameLength && current.every((c, i) => c.id === mapped[i]?.id && c.status === mapped[i]?.status)
+      if (!(sameLength && sameIds)) {
+        const updated = projects.map((p) => (p.id === projectId ? { ...p, applications: mapped } : p))
+        saveProjects(updated)
+      }
+      return mapped
+    } catch (_) {
+      const p = projects.find((x) => x.id === projectId)
+      return p?.applications ?? []
+    }
+  }
+
+  const mapApiVolunteerToVolunteer = (api: any): Volunteer => {
+    // Backend may return status like "ACTIVE"; normalize to title case used in UI
+    const rawStatus = String(api.status ?? "Active").toLowerCase()
+    const status: Volunteer["status"] = rawStatus.includes("inactive") ? "Inactive" : "Active"
+    return {
+      id: api.volunteer_id || api.id,
+      name: api.name ?? "",
+      email: api.email ?? "",
+      skills: Array.isArray(api.skills) ? api.skills : [],
+      status,
+    }
+  }
+
+  const fetchProjectVolunteers = async (projectId: string): Promise<Volunteer[]> => {
+    // If no API configured, return local volunteers
+    if (!API_URL) {
+      const p = projects.find((x) => x.id === projectId)
+      return p?.volunteers ?? []
+    }
+
+    try {
+      const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+      const tokenType = localStorage.getItem(TOKEN_TYPE_STORAGE_KEY) || "Bearer"
+      const headers: Record<string, string> = { "Content-Type": "application/json" }
+      if (token) headers["Authorization"] = `${tokenType} ${token}`
+
+      const res = await fetch(`${API_URL.replace(/\/$/, "")}/projects/${projectId}/volunteers`, { headers })
+      if (!res.ok) throw new Error(`Failed to fetch volunteers: ${res.status}`)
+      const apiVols = await res.json()
+      const mapped: Volunteer[] = Array.isArray(apiVols) ? apiVols.map((v: any) => mapApiVolunteerToVolunteer(v)) : []
+
+      // Update state if changed
+      const current = projects.find((p) => p.id === projectId)?.volunteers ?? []
+      const sameLength = current.length === mapped.length
+      const sameIds = sameLength && current.every((c, i) => c.id === mapped[i]?.id && c.status === mapped[i]?.status)
+      if (!(sameLength && sameIds)) {
+        const updated = projects.map((p) => (p.id === projectId ? { ...p, volunteers: mapped } : p))
+        saveProjects(updated)
+      }
+      return mapped
+    } catch (_) {
+      const p = projects.find((x) => x.id === projectId)
+      return p?.volunteers ?? []
+    }
+  }
+
   return (
     <ProjectsContext.Provider
       value={{
@@ -282,6 +644,8 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
         updateApplicationStatus,
         getUserProjects,
         getUserApplications,
+        fetchProjectApplications,
+        fetchProjectVolunteers,
       }}
     >
       {children}

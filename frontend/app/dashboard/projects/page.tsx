@@ -1,9 +1,9 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useAuth } from "@/contexts/AuthContext"
-import { useProjects, type Project } from "@/contexts/ProjectsContext"
+import { useProjects, type Project, type Application, type Volunteer } from "@/contexts/ProjectsContext"
 import {
   Plus,
   Trash2,
@@ -41,8 +41,13 @@ export default function ProjectsPage() {
     }
   }
 
-  const handleApplicationAction = (projectId: string, applicationId: string, status: "Accepted" | "Rejected") => {
-    updateApplicationStatus(projectId, applicationId, status)
+  const handleApplicationAction = (
+    projectId: string,
+    applicationId: string,
+    status: "Accepted" | "Rejected",
+    application?: Application,
+  ) => {
+    updateApplicationStatus(projectId, applicationId, status, application)
   }
 
   const containerVariants = {
@@ -352,8 +357,8 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-5 overflow-y-auto">
-      <div className="bg-white rounded-xl max-w-3xl w-full my-8">
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-xl max-w-3xl w-full my-10 max-h-[90vh] overflow-y-auto shadow-xl">
         <div className="p-8">
           <h2 className="text-2xl font-bold text-[#1f2937] mb-6">Create New Project</h2>
 
@@ -599,12 +604,99 @@ function ManageProjectModal({
 }: {
   project: Project
   onClose: () => void
-  onApplicationAction: (projectId: string, applicationId: string, status: "Accepted" | "Rejected") => void
+  onApplicationAction: (
+    projectId: string,
+    applicationId: string,
+    status: "Accepted" | "Rejected",
+    application?: Application,
+  ) => void
 }) {
+  const { fetchProjectApplications, fetchProjectVolunteers, projects } = useProjects()
   const [activeTab, setActiveTab] = useState<"applications" | "volunteers">("applications")
+  const [applications, setApplications] = useState<Application[]>([])
+  const [loadingApps, setLoadingApps] = useState(true)
+  const [volunteers, setVolunteers] = useState<Volunteer[]>(project.volunteers ?? [])
+  const [loadingVolunteers, setLoadingVolunteers] = useState(false)
+  const [volunteersError, setVolunteersError] = useState<string | null>(null)
 
-  const pendingApplications = project.applications.filter((a) => a.status === "Pending")
-  const reviewedApplications = project.applications.filter((a) => a.status !== "Pending")
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      setLoadingApps(true)
+      try {
+        const apps = await fetchProjectApplications(project.id)
+        if (mounted) {
+          setApplications(apps)
+        }
+      } finally {
+        if (mounted) setLoadingApps(false)
+      }
+    })()
+    return () => {
+      mounted = false
+    }
+  }, [project.id])
+
+  // Always reflect the most up-to-date project data from context (avoids stale volunteers after actions)
+  const currentProject = projects.find((p) => p.id === project.id) || project
+  const contextVolunteers = useMemo(() => currentProject.volunteers ?? [], [currentProject])
+  const pendingApplications = applications.filter((a) => a.status === "Pending")
+  const reviewedApplications = applications.filter((a) => a.status !== "Pending")
+
+  // Keep local applications in sync with context updates as a safety net
+  useEffect(() => {
+    const fromContext = projects.find((p) => p.id === project.id)?.applications ?? []
+    // If local is empty or lengths differ, sync from context
+    const needsSync = applications.length === 0 || applications.length !== fromContext.length
+    if (needsSync && fromContext.length > 0) {
+      setApplications(fromContext)
+    }
+  }, [projects, project.id])
+
+  // Keep volunteer list in sync with context updates (e.g. after accepting an application)
+  useEffect(() => {
+    if (activeTab === "volunteers") {
+      setVolunteers(contextVolunteers)
+    }
+  }, [contextVolunteers, activeTab])
+
+  // Fetch volunteers whenever the Volunteers tab is activated
+  useEffect(() => {
+    if (activeTab !== "volunteers") return
+
+    let cancelled = false
+    const loadVolunteers = async () => {
+      setLoadingVolunteers(true)
+      setVolunteersError(null)
+      try {
+        const fetched = await fetchProjectVolunteers(project.id)
+        if (!cancelled) {
+          setVolunteers(fetched)
+        }
+      } catch (_) {
+        if (!cancelled) {
+          setVolunteers(contextVolunteers)
+          setVolunteersError("Couldn't refresh volunteers from the server. Showing the most recent cached list.")
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingVolunteers(false)
+        }
+      }
+    }
+
+    // Only refetch when we don't already have data for this project
+    const hasVolunteersCached = contextVolunteers.length > 0
+    if (!hasVolunteersCached) {
+      loadVolunteers()
+    } else {
+      setVolunteers(contextVolunteers)
+    }
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, project.id, fetchProjectVolunteers, contextVolunteers])
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-5 overflow-y-auto">
@@ -630,7 +722,7 @@ function ManageProjectModal({
                   : "text-[#6b7280] hover:text-[#1f2937]"
               }`}
             >
-              Applications ({pendingApplications.length})
+              Applications ({applications.length})
             </button>
             <button
               onClick={() => setActiveTab("volunteers")}
@@ -640,97 +732,148 @@ function ManageProjectModal({
                   : "text-[#6b7280] hover:text-[#1f2937]"
               }`}
             >
-              Volunteers ({project.volunteers.length})
+              Volunteers ({currentProject.volunteers.length})
             </button>
           </div>
 
           {/* Applications Tab */}
           {activeTab === "applications" && (
             <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-              {pendingApplications.length === 0 && reviewedApplications.length === 0 ? (
-                <div className="text-center py-12">
-                  <Clock className="w-12 h-12 text-[#9ca3af] mx-auto mb-3" />
-                  <p className="text-[#6b7280]">No applications yet</p>
-                </div>
+              {loadingApps && applications.length === 0 ? (
+                <div className="text-center py-12 text-[#6b7280]">Loading applications...</div>
               ) : (
                 <>
-                  {pendingApplications.length > 0 && (
+                  {applications.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Clock className="w-12 h-12 text-[#9ca3af] mx-auto mb-3" />
+                      <p className="text-[#6b7280]">No applications yet</p>
+                    </div>
+                  ) : (
                     <>
-                      <h3 className="font-semibold text-[#1f2937] mb-3">Pending Applications</h3>
-                      {pendingApplications.map((app) => (
-                        <div key={app.id} className="p-4 bg-[#fdf2f8] rounded-lg border border-[#f3e8ff]">
-                          <div className="flex items-start justify-between mb-3">
-                            <div>
-                              <h4 className="font-semibold text-[#1f2937]">{app.volunteerName}</h4>
-                              <p className="text-sm text-[#6b7280]">{app.volunteerEmail}</p>
-                              {app.volunteerPhone && <p className="text-sm text-[#6b7280]">{app.volunteerPhone}</p>}
-                            </div>
-                            <span className="px-3 py-1 bg-[#fef3c7] text-[#f59e0b] rounded-full text-xs font-medium">
-                              Pending
-                            </span>
-                          </div>
+                      {pendingApplications.length > 0 && (
+                        <>
+                          <h3 className="font-semibold text-[#1f2937] mb-3">Pending Applications</h3>
+                          {pendingApplications.map((app) => (
+                            <div key={app.id} className="p-4 bg-[#fdf2f8] rounded-lg border border-[#f3e8ff]">
+                              <div className="flex items-start justify-between mb-3">
+                                <div>
+                                  <h4 className="font-semibold text-[#1f2937]">{app.volunteerName}</h4>
+                                  <p className="text-sm text-[#6b7280]">{app.volunteerEmail}</p>
+                                  {app.volunteerPhone && <p className="text-sm text-[#6b7280]">{app.volunteerPhone}</p>}
+                                </div>
+                                <span className="px-3 py-1 bg-[#fef3c7] text-[#f59e0b] rounded-full text-xs font-medium">
+                                  Pending
+                                </span>
+                              </div>
 
-                          {app.skills.length > 0 && (
-                            <div className="mb-3">
-                              <p className="text-xs font-medium text-[#6b7280] mb-2">Skills:</p>
-                              <div className="flex flex-wrap gap-2">
-                                {app.skills.map((skill) => (
-                                  <span key={skill} className="px-2 py-1 bg-white text-[#ec4899] rounded text-xs">
-                                    {skill}
-                                  </span>
-                                ))}
+                              {app.skills.length > 0 && (
+                                <div className="mb-3">
+                                  <p className="text-xs font-medium text-[#6b7280] mb-2">Skills:</p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {app.skills.map((skill) => (
+                                      <span key={skill} className="px-2 py-1 bg-white text-[#ec4899] rounded text-xs">
+                                        {skill}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {app.message && (
+                                <div className="mb-3">
+                                  <p className="text-xs font-medium text-[#6b7280] mb-1">Message:</p>
+                                  <p className="text-sm text-[#1f2937]">{app.message}</p>
+                                </div>
+                              )}
+
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => {
+                                    onApplicationAction(project.id, app.id, "Accepted", app)
+                                    setApplications((prev) => prev.map((a) => (a.id === app.id ? { ...a, status: "Accepted" } : a)))
+                                  }}
+                                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition-colors font-medium text-sm"
+                                >
+                                  <CheckCircle className="w-4 h-4" />
+                                  Accept
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    onApplicationAction(project.id, app.id, "Rejected", app)
+                                    setApplications((prev) => prev.map((a) => (a.id === app.id ? { ...a, status: "Rejected" } : a)))
+                                  }}
+                                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors font-medium text-sm"
+                                >
+                                  <XCircle className="w-4 h-4" />
+                                  Reject
+                                </button>
                               </div>
                             </div>
-                          )}
-
-                          {app.message && (
-                            <div className="mb-3">
-                              <p className="text-xs font-medium text-[#6b7280] mb-1">Message:</p>
-                              <p className="text-sm text-[#1f2937]">{app.message}</p>
+                          ))}
+                        </>
+                      )}
+                      {reviewedApplications.length > 0 && (
+                        <>
+                          <h3 className="font-semibold text-[#1f2937] mb-3 mt-6">Reviewed Applications</h3>
+                          {reviewedApplications.map((app) => (
+                            <div key={app.id} className="p-4 bg-white rounded-lg border border-[#f3e8ff]">
+                              <div className="flex items-start justify-between">
+                                <div>
+                                  <h4 className="font-semibold text-[#1f2937]">{app.volunteerName}</h4>
+                                  <p className="text-sm text-[#6b7280]">{app.volunteerEmail}</p>
+                                </div>
+                                <span
+                                  className={`px-3 py-1 rounded-full text-xs font-medium ${
+                                    app.status === "Accepted" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+                                  }`}
+                                >
+                                  {app.status}
+                                </span>
+                              </div>
                             </div>
-                          )}
-
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => onApplicationAction(project.id, app.id, "Accepted")}
-                              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition-colors font-medium text-sm"
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                              Accept
-                            </button>
-                            <button
-                              onClick={() => onApplicationAction(project.id, app.id, "Rejected")}
-                              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors font-medium text-sm"
-                            >
-                              <XCircle className="w-4 h-4" />
-                              Reject
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </>
-                  )}
-
-                  {reviewedApplications.length > 0 && (
-                    <>
-                      <h3 className="font-semibold text-[#1f2937] mb-3 mt-6">Reviewed Applications</h3>
-                      {reviewedApplications.map((app) => (
-                        <div key={app.id} className="p-4 bg-white rounded-lg border border-[#f3e8ff]">
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <h4 className="font-semibold text-[#1f2937]">{app.volunteerName}</h4>
-                              <p className="text-sm text-[#6b7280]">{app.volunteerEmail}</p>
+                          ))}
+                        </>
+                      )}
+                      {/* Fallback: if statuses are unknown, still render all applications */}
+                      {pendingApplications.length === 0 && reviewedApplications.length === 0 && applications.length > 0 && (
+                        <>
+                          <h3 className="font-semibold text-[#1f2937] mb-3">All Applications</h3>
+                          {applications.map((app) => (
+                            <div key={app.id} className="p-4 bg-white rounded-lg border border-[#f3e8ff]">
+                              <div className="flex items-start justify-between mb-3">
+                                <div>
+                                  <h4 className="font-semibold text-[#1f2937]">{app.volunteerName || app.volunteerEmail}</h4>
+                                  {app.volunteerEmail && <p className="text-sm text-[#6b7280]">{app.volunteerEmail}</p>}
+                                  {app.volunteerPhone && <p className="text-sm text-[#6b7280]">{app.volunteerPhone}</p>}
+                                </div>
+                                {app.status && (
+                                  <span className="px-3 py-1 bg-[#f3f4f6] text-[#6b7280] rounded-full text-xs font-medium">
+                                    {app.status}
+                                  </span>
+                                )}
+                              </div>
+                              {Array.isArray(app.skills) && app.skills.length > 0 && (
+                                <div className="mb-3">
+                                  <p className="text-xs font-medium text-[#6b7280] mb-2">Skills:</p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {app.skills.map((skill) => (
+                                      <span key={skill} className="px-2 py-1 bg-[#fce7f3] text-[#ec4899] rounded text-xs">
+                                        {skill}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {app.message && (
+                                <div className="mb-3">
+                                  <p className="text-xs font-medium text-[#6b7280] mb-1">Message:</p>
+                                  <p className="text-sm text-[#1f2937]">{app.message}</p>
+                                </div>
+                              )}
                             </div>
-                            <span
-                              className={`px-3 py-1 rounded-full text-xs font-medium ${
-                                app.status === "Accepted" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
-                              }`}
-                            >
-                              {app.status}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
+                          ))}
+                        </>
+                      )}
                     </>
                   )}
                 </>
@@ -741,25 +884,35 @@ function ManageProjectModal({
           {/* Volunteers Tab */}
           {activeTab === "volunteers" && (
             <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-              {project.volunteers.length === 0 ? (
+              {volunteersError && (
+                <div className="p-3 bg-red-50 text-red-600 rounded-lg text-sm">{volunteersError}</div>
+              )}
+
+              {loadingVolunteers ? (
+                <div className="text-center py-12 text-[#6b7280]">Loading volunteers...</div>
+              ) : volunteers.length === 0 ? (
                 <div className="text-center py-12">
                   <Users className="w-12 h-12 text-[#9ca3af] mx-auto mb-3" />
                   <p className="text-[#6b7280]">No volunteers yet</p>
                 </div>
               ) : (
-                project.volunteers.map((volunteer) => (
+                volunteers.map((volunteer) => (
                   <div key={volunteer.id} className="p-4 bg-white rounded-lg border border-[#f3e8ff]">
                     <div className="flex items-start justify-between mb-3">
                       <div>
-                        <h4 className="font-semibold text-[#1f2937]">{volunteer.name}</h4>
+                        <h4 className="font-semibold text-[#1f2937]">{volunteer.name || volunteer.email}</h4>
                         <p className="text-sm text-[#6b7280]">{volunteer.email}</p>
                       </div>
-                      <span className="px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-medium">
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          volunteer.status === "Active" ? "bg-green-50 text-green-700" : "bg-[#f3f4f6] text-[#6b7280]"
+                        }`}
+                      >
                         {volunteer.status}
                       </span>
                     </div>
 
-                    {volunteer.skills.length > 0 && (
+                    {Array.isArray(volunteer.skills) && volunteer.skills.length > 0 && (
                       <div>
                         <p className="text-xs font-medium text-[#6b7280] mb-2">Skills:</p>
                         <div className="flex flex-wrap gap-2">
