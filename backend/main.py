@@ -204,7 +204,11 @@ def create_project(
     return project
 @app.get('/projects', response_model=List[ProjectSchema])
 def get_projects(db: Session = Depends(get_db), current_user: Users = Depends(get_current_user)):
-    projects = db.query(ProjectModel).all()
+    projects = (
+        db.query(ProjectModel)
+        .options(selectinload(ProjectModel.owner), selectinload(ProjectModel.events))
+        .all()
+    )
     return projects
 @app.post('/projects/{project_id}/apply', response_model=ProjectApplicationSchema, status_code=status.HTTP_201_CREATED)
 def apply_to_project(

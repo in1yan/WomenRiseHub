@@ -141,12 +141,23 @@ class ProjectCreate(ProjectBase):
     events: List[ProjectEventCreate] = Field(default_factory=list)
 
 
+class ProjectOwnerSummary(BaseModel):
+    id: str
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phonenumber: Optional[str] = Field(default=None, max_length=32)
+
+    class Config:
+        from_attributes = True
+
+
 class Project(ProjectBase):
     id: str
     owner_id: str
     created_at: datetime
     updated_at: datetime
     events: List[ProjectEvent] = Field(default_factory=list)
+    owner: Optional[ProjectOwnerSummary] = None
 
     class Config:
         from_attributes = True

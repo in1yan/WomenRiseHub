@@ -1,11 +1,24 @@
 "use client"
 
 import type React from "react"
-import { useMemo, useState } from "react"
+import { useMemo, useState, useEffect } from "react"
 import { motion } from "@/lib/motion"
 import { useAuth } from "@/contexts/AuthContext"
-import { useProjects } from "@/contexts/ProjectsContext"
-import { TrendingUp, Users, FolderKanban, Clock, Target, Calendar, Download, Sparkles, Heart } from "lucide-react"
+import {
+  TrendingUp,
+  Users,
+  FolderKanban,
+  Clock,
+  Target,
+  Calendar,
+  Download,
+  Sparkles,
+  Heart,
+  ClipboardList,
+  CheckCircle,
+  XCircle,
+  Hourglass,
+} from "lucide-react"
 import {
   BarChart,
   Bar,
@@ -28,72 +41,121 @@ type DateRange = 7 | 30 | 90 | 365
 
 export default function AnalyticsPage() {
   const { user } = useAuth()
-  const { projects, getUserProjects, getUserApplications } = useProjects()
   const [dateRange, setDateRange] = useState<DateRange>(30)
+  const [analytics, setAnalytics] = useState({
+    totalProjects: 0,
+    totalEvents: 0,
+    totalHours: 0,
+    totalVolunteers: 0,
+    totalImpact: 0,
+    categoryData: [] as { name: string; value: number }[],
+    hoursData: [] as { month: string; hours: number }[],
+    skillData: [] as { name: string; value: number }[],
+    applicationStats: {
+      total: 0,
+      pending: 0,
+      accepted: 0,
+      rejected: 0,
+    },
+  })
+  const [loading, setLoading] = useState(true)
 
-  const userProjects = getUserProjects(user?.id || "")
-  const userApplications = getUserApplications(user?.id || "")
+  const API_URL = process.env.NEXT_PUBLIC_API_URL
+  const TOKEN_STORAGE_KEY = "womenrisehub_token"
+  const TOKEN_TYPE_STORAGE_KEY = "womenrisehub_token_type"
 
-  const analytics = useMemo(() => {
-    const cutoffDate = new Date()
-    cutoffDate.setDate(cutoffDate.getDate() - dateRange)
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      if (!API_URL || !user) {
+        setLoading(false)
+        return
+      }
 
-    const filteredProjects = userProjects.filter((p) => new Date(p.createdAt) >= cutoffDate)
+      try {
+        setLoading(true)
+        const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+        const tokenType = localStorage.getItem(TOKEN_TYPE_STORAGE_KEY) || "Bearer"
+        
+        if (!token) {
+          console.error("No authentication token found")
+          setLoading(false)
+          return
+        }
 
-    const totalProjects = filteredProjects.length
-    const totalEvents = filteredProjects.reduce((sum, p) => sum + p.events.length, 0)
-    const totalVolunteers = filteredProjects.reduce((sum, p) => sum + p.volunteers.length, 0)
-    const totalHours = totalVolunteers * 15 // Estimate 15 hours per volunteer
-    const totalImpact = totalVolunteers * 50 // Estimate 50 lives impacted per volunteer
+        const headers = {
+          Authorization: `${tokenType} ${token}`,
+          "Content-Type": "application/json",
+        }
 
-    // Category breakdown for bar chart
-    const categoryData = Object.entries(
-      filteredProjects.reduce(
-        (acc, p) => {
-          acc[p.category] = (acc[p.category] || 0) + 1
-          return acc
-        },
-        {} as Record<string, number>,
-      ),
-    ).map(([name, value]) => ({ name, value }))
+        // Fetch all analytics data
+        const [overviewRes, categoryRes, skillsRes, hoursRes, applicationStatsRes] = await Promise.all([
+          fetch(`${API_URL}/analytics/overview?days=${dateRange}`, { headers }),
+          fetch(`${API_URL}/analytics/projects-by-category?days=${dateRange}`, { headers }),
+          fetch(`${API_URL}/analytics/skills-distribution?days=${dateRange}`, { headers }),
+          fetch(`${API_URL}/analytics/monthly-hours?days=${dateRange}`, { headers }),
+          fetch(`${API_URL}/analytics/application-stats?days=${dateRange}`, { headers }),
+        ])
 
-    // Monthly volunteering hours for line chart
-    const monthlyHours: Record<string, number> = {}
-    filteredProjects.forEach((project) => {
-      project.volunteers.forEach((vol) => {
-        const month = new Date(vol.joinedAt).toLocaleDateString("en-US", { month: "short" })
-        monthlyHours[month] = (monthlyHours[month] || 0) + 15
-      })
-    })
-    const hoursData = Object.entries(monthlyHours).map(([month, hours]) => ({ month, hours }))
+        if (overviewRes.ok && categoryRes.ok && skillsRes.ok && hoursRes.ok && applicationStatsRes.ok) {
+          const overview = await overviewRes.json()
+          const categoryData = await categoryRes.json()
+          const skillData = await skillsRes.json()
+          const hoursData = await hoursRes.json()
+          const applicationStats = await applicationStatsRes.json()
 
-    // Skill categories for donut chart
-    const skillCounts: Record<string, number> = {}
-    filteredProjects.forEach((project) => {
-      project.skills.forEach((skill) => {
-        skillCounts[skill] = (skillCounts[skill] || 0) + 1
-      })
-    })
-    const skillData = Object.entries(skillCounts)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 5)
-      .map(([name, value]) => ({ name, value }))
-
-    return {
-      totalProjects,
-      totalEvents,
-      totalHours,
-      totalVolunteers,
-      totalImpact,
-      categoryData,
-      hoursData,
-      skillData,
+          setAnalytics({
+            totalProjects: overview.total_projects || 0,
+            totalEvents: overview.total_events || 0,
+            totalHours: overview.total_hours || 0,
+            totalVolunteers: overview.total_volunteers || 0,
+            totalImpact: overview.total_impact || 0,
+            categoryData: categoryData || [],
+            hoursData: hoursData || [],
+            skillData: skillData || [],
+            applicationStats: {
+              total: applicationStats.total || 0,
+              pending: applicationStats.pending || 0,
+              accepted: applicationStats.accepted || 0,
+              rejected: applicationStats.rejected || 0,
+            },
+          })
+        } else {
+          // Log error details
+          console.error("Analytics API errors:")
+          if (!overviewRes.ok) {
+            const errorText = await overviewRes.text()
+            console.error(`Overview: ${overviewRes.status} - ${errorText}`)
+          }
+          if (!categoryRes.ok) {
+            const errorText = await categoryRes.text()
+            console.error(`Category: ${categoryRes.status} - ${errorText}`)
+          }
+          if (!skillsRes.ok) {
+            const errorText = await skillsRes.text()
+            console.error(`Skills: ${skillsRes.status} - ${errorText}`)
+          }
+          if (!hoursRes.ok) {
+            const errorText = await hoursRes.text()
+            console.error(`Hours: ${hoursRes.status} - ${errorText}`)
+          }
+          if (!applicationStatsRes.ok) {
+            const errorText = await applicationStatsRes.text()
+            console.error(`Applications: ${applicationStatsRes.status} - ${errorText}`)
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch analytics:", error)
+      } finally {
+        setLoading(false)
+      }
     }
-  }, [userProjects, dateRange])
+
+    fetchAnalytics()
+  }, [dateRange, API_URL, user])
 
   const handleExport = (format: "csv" | "pdf") => {
     if (format === "csv") {
-      const csvContent = `Analytics Report - ${dateRange} Days\n\nKPI,Value\nTotal Projects,${analytics.totalProjects}\nTotal Events,${analytics.totalEvents}\nTotal Hours,${analytics.totalHours}\nTotal Volunteers,${analytics.totalVolunteers}\nTotal Impact,${analytics.totalImpact}\n\nProjects by Category\n${analytics.categoryData.map((d) => `${d.name},${d.value}`).join("\n")}`
+      const csvContent = `Analytics Report - ${dateRange} Days\n\nKPI,Value\nTotal Projects,${analytics.totalProjects}\nTotal Events,${analytics.totalEvents}\nTotal Hours,${analytics.totalHours}\nTotal Volunteers,${analytics.totalVolunteers}\nTotal Impact,${analytics.totalImpact}\nTotal Applications,${analytics.applicationStats.total}\n\nProjects by Category\n${analytics.categoryData.map((d) => `${d.name},${d.value}`).join("\n")}\n\nApplication Stats\nTotal,${analytics.applicationStats.total}\nPending,${analytics.applicationStats.pending}\nAccepted,${analytics.applicationStats.accepted}\nRejected,${analytics.applicationStats.rejected}`
 
       const blob = new Blob([csvContent], { type: "text/csv" })
       const url = window.URL.createObjectURL(blob)
@@ -105,6 +167,39 @@ export default function AnalyticsPage() {
       alert("PDF export coming soon!")
     }
   }
+
+  const applicationBreakdown = useMemo(
+    () => {
+      const { total, pending, accepted, rejected } = analytics.applicationStats
+      const safeTotal = total > 0 ? total : 0
+      const percentage = (value: number) => (safeTotal > 0 ? Math.round((value / safeTotal) * 100) : 0)
+
+      return [
+        {
+          label: "Pending Applications",
+          value: pending,
+          percentage: percentage(pending),
+          icon: Hourglass,
+          iconColor: "#f59e0b",
+        },
+        {
+          label: "Accepted Applications",
+          value: accepted,
+          percentage: percentage(accepted),
+          icon: CheckCircle,
+          iconColor: "#10b981",
+        },
+        {
+          label: "Rejected Applications",
+          value: rejected,
+          percentage: percentage(rejected),
+          icon: XCircle,
+          iconColor: "#ef4444",
+        },
+      ]
+    },
+    [analytics.applicationStats],
+  )
 
   const containerVariants = {
     hidden: { opacity: 0 },
@@ -123,6 +218,19 @@ export default function AnalyticsPage() {
       y: 0,
       transition: { duration: 0.5 },
     },
+  }
+
+  if (loading) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex items-center justify-center h-96">
+          <div className="text-center">
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-[#ec4899]"></div>
+            <p className="mt-4 text-[#6b7280]">Loading analytics...</p>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -170,7 +278,7 @@ export default function AnalyticsPage() {
         variants={containerVariants}
         initial="hidden"
         animate="visible"
-        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8"
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4 mb-8"
       >
         <AnimatedKPICard
           icon={FolderKanban}
@@ -201,11 +309,18 @@ export default function AnalyticsPage() {
           delay={0.3}
         />
         <AnimatedKPICard
+          icon={ClipboardList}
+          label="Total Applications"
+          value={analytics.applicationStats.total}
+          gradient="from-[#fbcfe8] to-[#fdf2f8]"
+          delay={0.4}
+        />
+        <AnimatedKPICard
           icon={Heart}
           label="Total Impact"
           value={analytics.totalImpact}
           gradient="from-[#ec4899] to-[#f472b6]"
-          delay={0.4}
+          delay={0.5}
         />
       </motion.div>
 
@@ -330,6 +445,25 @@ export default function AnalyticsPage() {
         )}
       </motion.div>
 
+      <motion.div
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+        className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8"
+      >
+        {applicationBreakdown.map((item, index) => (
+          <StatusStatCard
+            key={item.label}
+            icon={item.icon}
+            label={item.label}
+            value={item.value}
+            percentage={item.percentage}
+            iconColor={item.iconColor}
+            delay={0.6 + index * 0.1}
+          />
+        ))}
+      </motion.div>
+
       {analytics.totalProjects > 0 && (
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
@@ -364,6 +498,42 @@ export default function AnalyticsPage() {
         </motion.div>
       )}
     </div>
+  )
+}
+
+function StatusStatCard({
+  icon: Icon,
+  label,
+  value,
+  percentage,
+  iconColor,
+  delay,
+}: {
+  icon: React.ElementType
+  label: string
+  value: number
+  percentage: number
+  iconColor: string
+  delay: number
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay, duration: 0.5 }}
+      whileHover={{ y: -5, transition: { duration: 0.2 } }}
+      className="bg-white rounded-xl shadow-md border border-[#f3e8ff] p-6"
+    >
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Icon className="w-5 h-5" style={{ color: iconColor }} />
+          <h3 className="text-sm font-semibold text-[#1f2937]">{label}</h3>
+        </div>
+        <span className="text-sm font-medium text-[#6b7280]">{percentage}%</span>
+      </div>
+      <p className="text-3xl font-bold text-[#1f2937]">{value}</p>
+      <p className="text-xs text-[#9ca3af] mt-1">of total applications</p>
+    </motion.div>
   )
 }
 

@@ -250,6 +250,8 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
         }))
       : []
 
+    const owner = api.owner ?? {}
+
     const project: Project = {
       id: api.id,
       title: api.title,
@@ -262,10 +264,10 @@ export function ProjectsProvider({ children }: { children: ReactNode }) {
       startDate: typeof api.start_date === "string" ? api.start_date : api.startDate,
       endDate: typeof api.end_date === "string" ? api.end_date : api.endDate,
       imageUrl: api.image_url ?? api.imageUrl ?? "/volunteer-project.jpg",
-      creatorId: api.owner_id ?? api.creatorId ?? "",
-      creatorName: api.owner?.name ?? api.creatorName ?? "",
-      creatorEmail: api.owner?.email ?? api.creatorEmail ?? "",
-      creatorPhone: api.owner?.phonenumber ?? api.creatorPhone ?? "",
+      creatorId: owner.id ?? api.owner_id ?? api.creatorId ?? "",
+      creatorName: owner.name ?? api.creatorName ?? "",
+      creatorEmail: owner.email ?? api.creatorEmail ?? "",
+      creatorPhone: owner.phonenumber ?? owner.phone ?? api.creatorPhone ?? "",
       events,
       volunteers: [],
       applications: [],
