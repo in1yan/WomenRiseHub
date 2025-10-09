@@ -196,6 +196,36 @@ export default function DashboardPage() {
           <p className="text-sm text-[#6b7280] mt-1">Connections Made</p>
         </motion.div>
       </motion.div>
+
+      <motion.section
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+        className="mt-12 px-4"
+      >
+        <motion.div
+          variants={itemVariants}
+          className="bg-white rounded-2xl border border-[#f3e8ff] shadow-md overflow-hidden"
+        >
+          <div className="p-8 pb-0 text-center">
+            <h2 className="text-2xl font-semibold text-[#1f2937] mb-2">Watch WomenRiseHub in Action</h2>
+            <p className="text-[#6b7280] max-w-2xl mx-auto">
+              See how volunteers explore opportunities, collaborate on projects, and track their impact across the platform.
+            </p>
+          </div>
+          <div className="p-4 sm:p-8">
+            <div className="relative w-full rounded-xl overflow-hidden shadow-lg aspect-video">
+              <iframe
+                className="w-full h-full border-0"
+                src="https://www.youtube.com/embed/C8w5WT_XQvE"
+                title="WomenRiseHub Platform Demo"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        </motion.div>
+      </motion.section>
     </div>
   )
 }

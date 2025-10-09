@@ -5,7 +5,7 @@ A full-stack platform empowering women changemakers to discover volunteer opport
 ## 🚀 Demo
 
 - **Live Site:** https://women-rise-hub.vercel.app/
-- **Demo Video:** https://www.youtube.com/watch?v=Z1CrgXSmYbI
+- **Demo Video:** https://www.youtube.com/watch?v=C8w5WT_XQvE
 
 ## ✨ Key Features
 
