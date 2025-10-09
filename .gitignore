@@ -1,0 +1,58 @@
+# Root gitignore shared by frontend (Next.js) and backend (Python/FastAPI)
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+#########################
+# OS / Editor clutter   #
+#########################
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+#########################
+# Frontend (Next.js)    #
+#########################
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/.swc/
+frontend/dist/
+frontend/.vercel/
+frontend/.pnpm-store/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.pnpm-debug.log*
+frontend/pnpm-debug.log*
+frontend/.env*
+
+#########################
+# Backend (Python)      #
+#########################
+backend/__pycache__/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/.venv/
+backend/venv/
+backend/.coverage
+backend/coverage/
+backend/htmlcov/
+backend/*.py[cod]
+backend/.env*
+backend/database.db
+
+#########################
+# Shared assets         #
+#########################
+uploads/**/*.tmp
+uploads/**/*.log
+
+#########################
+# TypeScript / Build    #
+#########################
+*.tsbuildinfo
+next-env.d.ts

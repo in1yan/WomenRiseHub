@@ -2,7 +2,7 @@ import os
 import random
 import uuid
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List
 
@@ -108,7 +108,15 @@ def get_db():
 
 def _get_date_threshold(days: int) -> datetime:
     clamped_days = max(1, min(days, 365))
-    return datetime.utcnow() - timedelta(days=clamped_days)
+    return datetime.now(timezone.utc) - timedelta(days=clamped_days)
+
+
+def _normalize_to_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def generate_user_id(db: Session) -> str:
@@ -458,10 +466,13 @@ def list_project_volunteers(
 
 
 def _volunteer_within_range(volunteer: ProjectVolunteerModel, *, threshold: datetime) -> bool:
-    if volunteer.joined_at and volunteer.joined_at >= threshold:
+    threshold_utc = _normalize_to_utc(threshold) or threshold
+    joined_at = _normalize_to_utc(volunteer.joined_at)
+    if joined_at and joined_at >= threshold_utc:
         return True
     project = volunteer.project
-    if project and project.created_at and project.created_at >= threshold:
+    project_created_at = _normalize_to_utc(project.created_at if project else None)
+    if project_created_at and project_created_at >= threshold_utc:
         return True
     return False
 
@@ -574,6 +585,7 @@ def get_monthly_hours(
     current_user: Users = Depends(get_current_user),
 ):
     threshold = _get_date_threshold(days)
+    threshold_utc = _normalize_to_utc(threshold) or threshold
 
     volunteers = (
         db.query(ProjectVolunteerModel)
@@ -586,7 +598,8 @@ def get_monthly_hours(
     monthly_hours: defaultdict[str, int] = defaultdict(int)
     for volunteer in volunteers:
         reference_date = volunteer.joined_at or (volunteer.project.created_at if volunteer.project else None)
-        if not reference_date or reference_date < threshold:
+        reference_date = _normalize_to_utc(reference_date)
+        if not reference_date or reference_date < threshold_utc:
             continue
         month_key = reference_date.strftime('%Y-%m')
         monthly_hours[month_key] += volunteer.hours_contributed if volunteer.hours_contributed is not None else 15

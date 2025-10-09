@@ -45,6 +45,7 @@ interface AuthContextType {
   logout: () => void
   updateProfile: (data: Partial<User>) => Promise<boolean>
   isAuthenticated: boolean
+  isLoading: boolean
 }
 
 interface SignupData {
@@ -97,6 +98,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
   // If you want the frontend to talk to a backend, set NEXT_PUBLIC_API_URL in your
   // environment (e.g. `.env.local`). When set, AuthContext will call the backend
   // endpoints implemented in the `backend/` folder: POST /login, POST /create/user,
@@ -105,15 +107,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const API_URL = process.env.NEXT_PUBLIC_API_URL || ""
 
   useEffect(() => {
-    if (API_URL) {
-      // Try to restore session using stored JWT token
-      ;(async () => {
+    let isMounted = true
+
+    const initializeAuth = async () => {
+      if (API_URL) {
         try {
           const token = localStorage.getItem(TOKEN_STORAGE_KEY)
           const tokenType = localStorage.getItem(TOKEN_TYPE_STORAGE_KEY) || "Bearer"
+
           if (!token) {
-            setUser(null)
-            setIsAuthenticated(false)
+            if (isMounted) {
+              setUser(null)
+              setIsAuthenticated(false)
+              setIsLoading(false)
+            }
             return
           }
 
@@ -124,30 +131,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               Authorization: `${tokenType} ${token}`,
             },
           })
+
           if (res.ok) {
             const data: BackendUser = await res.json()
-            const mapped = mapApiUserToUser(data)
-            setUser(mapped)
-            setIsAuthenticated(true)
-          } else {
+            if (isMounted) {
+              const mapped = mapApiUserToUser(data)
+              setUser(mapped)
+              setIsAuthenticated(true)
+            }
+          } else if (isMounted) {
             setUser(null)
             setIsAuthenticated(false)
             localStorage.removeItem(TOKEN_STORAGE_KEY)
             localStorage.removeItem(TOKEN_TYPE_STORAGE_KEY)
           }
         } catch (err) {
-          // network error -> treat as not authenticated
-          setUser(null)
-          setIsAuthenticated(false)
+          if (isMounted) {
+            setUser(null)
+            setIsAuthenticated(false)
+          }
+        } finally {
+          if (isMounted) {
+            setIsLoading(false)
+          }
         }
-      })()
-    } else {
-      // Fallback to localStorage-based mock (existing behavior)
+        return
+      }
+
       const storedUser = localStorage.getItem("womenrisehub_user")
-      if (storedUser) {
+      if (storedUser && isMounted) {
         setUser(JSON.parse(storedUser))
         setIsAuthenticated(true)
+      } else if (isMounted) {
+        setUser(null)
+        setIsAuthenticated(false)
       }
+      if (isMounted) {
+        setIsLoading(false)
+      }
+    }
+
+    void initializeAuth()
+
+    return () => {
+      isMounted = false
     }
   }, [API_URL])
 
@@ -355,7 +382,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, login, signup, logout, updateProfile, isAuthenticated }}>
+    <AuthContext.Provider value={{ user, login, signup, logout, updateProfile, isAuthenticated, isLoading }}>
       {children}
     </AuthContext.Provider>
   )
