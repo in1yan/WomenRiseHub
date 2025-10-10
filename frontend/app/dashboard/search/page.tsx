@@ -1,8 +1,6 @@
 "use client"
 
 import { useState, useMemo } from "react"
-import Link from "next/link"
-import { usePathname } from "next/navigation"
 import { useAuth } from "@/contexts/AuthContext"
 import { useProjects, type Project } from "@/contexts/ProjectsContext"
 import {
@@ -17,10 +15,6 @@ import {
   X,
   ExternalLink,
   CheckCircle,
-  Home,
-  User,
-  FolderKanban,
-  BarChart3,
 } from "lucide-react"
 import Image from "next/image"
 import { motion, AnimatePresence } from "@/lib/motion"
@@ -28,7 +22,6 @@ import { motion, AnimatePresence } from "@/lib/motion"
 export default function SearchPage() {
   const { user } = useAuth()
   const { projects, applyToProject } = useProjects()
-  const pathname = usePathname()
 
   const [searchQuery, setSearchQuery] = useState("")
   const [filters, setFilters] = useState({
@@ -48,17 +41,6 @@ export default function SearchPage() {
   })
   const [applicationSuccess, setApplicationSuccess] = useState(false)
   const [skillInput, setSkillInput] = useState("")
-
-  const quickNavItems = useMemo(
-    () => [
-      { icon: Home, label: "Dashboard", href: "/dashboard" },
-      { icon: User, label: "Profile", href: "/dashboard/profile" },
-      { icon: Search, label: "Search Opportunities", href: "/dashboard/search" },
-      { icon: FolderKanban, label: "Projects", href: "/dashboard/projects" },
-      { icon: BarChart3, label: "Analytics", href: "/dashboard/analytics" },
-    ],
-    [],
-  )
 
   // Get recommended projects based on user skills and interests
   const recommendedProjects = useMemo(() => {
@@ -148,38 +130,6 @@ export default function SearchPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-5">
-      <motion.nav
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
-        className="mb-6"
-      >
-  <div className="flex items-center gap-3 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {quickNavItems.map((item) => {
-            const Icon = item.icon
-            const isActive = pathname === item.href
-            const baseStyles =
-              "flex items-center gap-2 px-4 py-2 rounded-full border transition-all whitespace-nowrap shadow-sm"
-            const activeStyles = "bg-gradient-to-r from-[#ec4899] to-[#8b5cf6] border-transparent"
-            const inactiveStyles = "bg-white border-[#f3e8ff] hover:bg-[#fdf2f8]"
-
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={isActive ? "page" : undefined}
-                className={`${baseStyles} ${isActive ? activeStyles : inactiveStyles}`}
-              >
-                <Icon className={`w-4 h-4 ${isActive ? "text-white" : "text-[#ec4899]"}`} />
-                <span className={`text-sm font-medium ${isActive ? "text-white" : "text-[#1f2937]"}`}>
-                  {item.label}
-                </span>
-              </Link>
-            )
-          })}
-        </div>
-      </motion.nav>
-
       <motion.div
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
