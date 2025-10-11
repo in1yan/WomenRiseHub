@@ -5,8 +5,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List
-
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status
+from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func
@@ -69,7 +69,16 @@ CONTENT_TYPE_EXTENSION_MAP = {
 ALLOWED_IMAGE_EXTENSIONS = set(CONTENT_TYPE_EXTENSION_MAP.values())
 MAX_IMAGE_SIZE_MB = 5
 MAX_IMAGE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024
-
+mail_conf = ConnectionConfig(
+    MAIL_USERNAME=os.environ.get("MAIL_UNAME"),  
+    MAIL_PASSWORD = os.environ.get("MAIL_PASSWORD"),
+    MAIL_FROM = os.environ.get("MAIL_FROM"),
+    MAIL_SERVER = "smtp.gmail.com",
+    MAIL_PORT = 587,
+    MAIL_STARTTLS = True,
+    MAIL_SSL_TLS = False,
+    TEMPLATE_FOLDER = Path(__file__).parent / 'templates',
+)
 
 def _validate_root_relative_path(path: str) -> str:
     parts = path.split("/")
@@ -349,6 +358,7 @@ def get_projects(db: Session = Depends(get_db), current_user: Users = Depends(ge
     return projects
 @app.post('/projects/{project_id}/apply', response_model=ProjectApplicationSchema, status_code=status.HTTP_201_CREATED)
 def apply_to_project(
+    background_tasks: BackgroundTasks,
     project_id: str,
     details: ProjectApplicationApply,
     db: Session = Depends(get_db),
@@ -383,6 +393,21 @@ def apply_to_project(
         message=details.message,
         status=ApplicationStatus.PENDING,
     )
+    creator_details = db.query(Users.email).join(ProjectModel, Users.id == ProjectModel.owner_id).filter(ProjectModel.id == project_id).first()
+    message = MessageSchema(
+        subject="New Application",
+        recipients=[creator_details.email] if creator_details else None,
+        template_body = {
+            "name":current_user.name,
+            "email" : current_user.email,
+            "phone": current_user.phonenumber,
+            "skills": details.skills,
+            "message": details.message,
+        },
+        subtype = MessageType.html
+    )
+    fm = FastMail(mail_conf)
+    background_tasks.add_task(fm.send_message, message, template_name="new_application.html")
     db.add(application)
     db.commit()
     db.refresh(application)

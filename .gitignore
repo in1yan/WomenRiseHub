@@ -19,8 +19,10 @@ frontend/.pnpm-debug.log*
 # env files
 frontend/.env*
 backend/.env
+backend/.venv/
 
-/backend/__pycache__/
+backend/__pycache__/
+backend/database.db
 # vercel
 .vercel
 
